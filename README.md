@@ -19,6 +19,8 @@ gdstyle catches style violations, naming inconsistencies, and common code-qualit
 - Formatter (`gdstyle fmt`) that's in-place and idempotent, and reorders class members into the canonical Godot order.
 - Auto-fix: `--fix` for the safe ones, `--unsafe-fix` for renames. Renames follow into other `.gd` files and into the `.tscn`/`.tres` scene wiring.
 - Single static binary. No Python, no Rust toolchain, no Godot install required to run it.
+- Optional Godot editor plugin: bottom panel with clickable diagnostics, single-click fixes, Lint/Format on save. Uses the GDExtension when present, falls back to the CLI binary otherwise.
+- [pre-commit](https://pre-commit.com) framework integration out of the box (`gdstyle` and `gdstyle-fmt` hooks).
 - Text and JSON output with configurable exit codes, so it slots into CI.
 - TOML config (`gdstyle.toml`) with per-rule overrides and CLI flags for one-off tweaks.
 - Inline suppression with `# gdstyle:ignore` comments.
