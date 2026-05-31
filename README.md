@@ -439,6 +439,25 @@ jobs:
 
 ### Pre-commit hook
 
+gdstyle ships hooks for the [pre-commit](https://pre-commit.com) framework.
+Add the following to your project's `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/atelico/gdstyle
+    rev: v0.1.0   # pin to a released tag; bump with `pre-commit autoupdate`
+    hooks:
+      - id: gdstyle          # lint (fails the commit on diagnostics)
+      - id: gdstyle-fmt      # format in place
+```
+
+Then install the git hook with `pre-commit install`. The first run builds
+gdstyle from source via cargo, so the user needs a Rust toolchain on their
+machine; subsequent runs are cached.
+
+If you'd rather not depend on the pre-commit framework, a minimal raw git
+hook also works:
+
 ```bash
 #!/bin/bash
 # .git/hooks/pre-commit

@@ -1,0 +1,13 @@
+- id: gdstyle
+  name: gdstyle (lint)
+  description: Lint GDScript files with gdstyle
+  entry: gdstyle check
+  language: rust
+  files: \.gd$
+
+- id: gdstyle-fmt
+  name: gdstyle (format)
+  description: Format GDScript files in place with gdstyle
+  entry: gdstyle fmt
+  language: rust
+  files: \.gd$
