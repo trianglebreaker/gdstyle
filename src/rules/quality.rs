@@ -926,14 +926,86 @@ pub fn check_no_else_return(file: &ScriptFile, diagnostics: &mut Vec<Diagnostic>
 // New rule 13: unreachable-code
 // ---------------------------------------------------------------------------
 
+/// Returns the net `(`+`[`+`{` minus `)`+`]`+`}` count on a single line,
+/// ignoring delimiters inside string literals and trailing `#` comments.
+/// Used by `check_unreachable_code` to skip continuation lines of a
+/// multi-line `return`/`break`/`continue` statement.
+fn line_bracket_delta(line: &str) -> i32 {
+    let mut depth: i32 = 0;
+    let mut chars = line.chars().peekable();
+    let mut in_string: Option<char> = None; // ' or " of the current string
+    while let Some(ch) = chars.next() {
+        // Inside a string literal: only the matching quote ends it, and
+        // a backslash escapes the next char.
+        if let Some(q) = in_string {
+            if ch == '\\' {
+                chars.next();
+                continue;
+            }
+            if ch == q {
+                in_string = None;
+            }
+            continue;
+        }
+        match ch {
+            '#' => break, // rest of line is a comment
+            '"' | '\'' => in_string = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            _ => {}
+        }
+    }
+    depth
+}
+
+/// Returns true if `line` ends with a backslash continuation (any trailing
+/// whitespace after the backslash is allowed but a backslash inside a
+/// string or before a comment doesn't count).
+fn ends_with_backslash_continuation(line: &str) -> bool {
+    // Strip trailing comment first.
+    let no_comment = strip_trailing_comment(line);
+    no_comment.trim_end().ends_with('\\')
+}
+
+/// Strip the trailing `# ...` comment from a line, respecting strings.
+fn strip_trailing_comment(line: &str) -> &str {
+    let mut in_string: Option<char> = None;
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let ch = bytes[i] as char;
+        if let Some(q) = in_string {
+            if ch == '\\' {
+                i += 2;
+                continue;
+            }
+            if ch == q {
+                in_string = None;
+            }
+            i += 1;
+            continue;
+        }
+        match ch {
+            '"' | '\'' => in_string = Some(ch),
+            '#' => return &line[..i],
+            _ => {}
+        }
+        i += 1;
+    }
+    line
+}
+
 /// Warn about code that appears after `return`, `break`, or `continue` at the
 /// same indentation level within a block.
 pub fn check_unreachable_code(file: &ScriptFile, diagnostics: &mut Vec<Diagnostic>) {
     let mut reported: HashSet<usize> = HashSet::new();
 
-    for (i, line) in file.lines.iter().enumerate() {
+    let mut i = 0;
+    while i < file.lines.len() {
+        let line = &file.lines[i];
         let trimmed = line.trim();
         if !(trimmed.starts_with("return") || trimmed == "break" || trimmed == "continue") {
+            i += 1;
             continue;
         }
 
@@ -945,14 +1017,32 @@ pub fn check_unreachable_code(file: &ScriptFile, diagnostics: &mut Vec<Diagnosti
             let rest = &trimmed[6..];
             let next = rest.chars().next().unwrap_or('\0');
             if !matches!(next, ' ' | '\t' | '(') {
+                i += 1;
                 continue;
             }
         }
 
         let stmt_indent = indent_level(line);
 
-        // Check lines after this one at the same indent level
-        for j in (i + 1)..file.lines.len() {
+        // The terminator statement can itself span multiple lines via
+        // unclosed brackets (`return floori(\n\t\t1.2\n\t)`) or a
+        // backslash continuation. Walk forward through every line that
+        // is logically part of the same statement before scanning for
+        // unreachable code. Without this, the closing `)` of a
+        // multi-line return is at the same indent as `return` and gets
+        // flagged as "unreachable" even though it's the same statement.
+        let mut depth = line_bracket_delta(line);
+        let mut prev_backslash = ends_with_backslash_continuation(line);
+        let mut stmt_end = i;
+        while (depth > 0 || prev_backslash) && stmt_end + 1 < file.lines.len() {
+            stmt_end += 1;
+            let cont = &file.lines[stmt_end];
+            depth += line_bracket_delta(cont);
+            prev_backslash = ends_with_backslash_continuation(cont);
+        }
+
+        // Now scan from the line AFTER the statement ends.
+        for j in (stmt_end + 1)..file.lines.len() {
             let next = &file.lines[j];
             let next_trimmed = next.trim();
 
@@ -987,6 +1077,11 @@ pub fn check_unreachable_code(file: &ScriptFile, diagnostics: &mut Vec<Diagnosti
                 break; // One diagnostic per unreachable block
             }
         }
+
+        // Advance past the (possibly multi-line) statement we just
+        // analysed so we don't re-enter the same return on continuation
+        // lines that start with `return` substring.
+        i = stmt_end + 1;
     }
 }
 
@@ -1729,6 +1824,106 @@ mod tests {
         check_unreachable_code(&file, &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].span.line, 3);
+    }
+
+    #[test]
+    fn unreachable_code_multiline_return_close_paren_not_flagged() {
+        // Regression for issue #3: a multi-line return like
+        //     return floori(
+        //         1.2
+        //     )
+        // would have its closing `)` flagged as "unreachable code"
+        // because the rule scanned forward line-by-line ignoring that
+        // the closing paren is part of the same `return` statement.
+        let file = ScriptFile {
+            path: "test.gd".to_string(),
+            lines: vec![
+                "func single_return() -> int:".to_string(),
+                "\treturn floori(".to_string(),
+                "\t\t1.2".to_string(),
+                "\t)".to_string(),
+            ],
+            members: vec![],
+        };
+        let mut diags = Vec::new();
+        check_unreachable_code(&file, &mut diags);
+        assert!(
+            diags.is_empty(),
+            "closing paren of multi-line return must not be flagged, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn unreachable_code_multiline_return_user_reported_shape() {
+        // Verbatim shape from issue #3 reporter (EvilsPresley): two
+        // multi-line `return` statements, one inside `if` with an
+        // inconsistently-indented close paren, one at function-body
+        // level with the canonical close-paren indent. Neither should
+        // produce an unreachable-code diagnostic.
+        let file = ScriptFile {
+            path: "test.gd".to_string(),
+            lines: vec![
+                "func unreachable_code(".to_string(),
+                "\treachable: bool = true".to_string(),
+                ") -> int:".to_string(),
+                "\tif reachable:".to_string(),
+                "\t\treturn floori(".to_string(),
+                "\t\t\t1.1".to_string(),
+                "\t\t\t)".to_string(),
+                "\treturn floori(".to_string(),
+                "\t\t1.2".to_string(),
+                "\t)".to_string(),
+            ],
+            members: vec![],
+        };
+        let mut diags = Vec::new();
+        check_unreachable_code(&file, &mut diags);
+        assert!(
+            diags.is_empty(),
+            "no unreachable-code expected on issue #3 example, got: {:?}",
+            diags
+        );
+    }
+
+    #[test]
+    fn unreachable_code_backslash_continuation_not_flagged() {
+        // A `return` whose expression continues onto the next line via
+        // backslash continuation is one statement, not two — and the
+        // continuation line lands at the same indent as `return`.
+        let file = ScriptFile {
+            path: "test.gd".to_string(),
+            lines: vec![
+                "func sum() -> int:".to_string(),
+                "\treturn 1 + 2 \\".to_string(),
+                "\t\t+ 3".to_string(),
+            ],
+            members: vec![],
+        };
+        let mut diags = Vec::new();
+        check_unreachable_code(&file, &mut diags);
+        assert!(diags.is_empty(), "got: {:?}", diags);
+    }
+
+    #[test]
+    fn unreachable_code_after_multiline_return_still_flagged() {
+        // True positive guard: code at the same indent AFTER the
+        // multi-line return has closed must still be flagged.
+        let file = ScriptFile {
+            path: "test.gd".to_string(),
+            lines: vec![
+                "func foo() -> int:".to_string(),
+                "\treturn floori(".to_string(),
+                "\t\t1.2".to_string(),
+                "\t)".to_string(),
+                "\tvar x = 2".to_string(),
+            ],
+            members: vec![],
+        };
+        let mut diags = Vec::new();
+        check_unreachable_code(&file, &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].span.line, 5);
     }
 
     #[test]
