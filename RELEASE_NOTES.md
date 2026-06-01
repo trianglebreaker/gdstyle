@@ -1,24 +1,38 @@
-## gdstyle 0.1.3
+## gdstyle 0.1.4
 
-Patch release fixing a false positive in `quality/unreachable-code`.
+Adds file-scope suppression so class- and file-level rules can be
+silenced cleanly.
 
-### Fixed
+### Added
 
-- **`quality/unreachable-code`** no longer flags the closing `)` of a
-  multi-line `return` statement as unreachable. The previous
-  implementation was line-based and walked forward from each
-  `return`/`break`/`continue` looking for any same-indent non-blank
-  line. The closing `)` of `return floori(\n\t\t1.2\n\t)` lands at the
-  same indent as `return`, so it was wrongly reported.
+- **`# gdstyle:ignore-file` directive** for file-scope suppression.
 
-  The rule now tracks open-bracket depth (`(` `[` `{`) and backslash
-  continuation across lines, masking delimiters inside string literals
-  and trailing `#` comments. While a `return` statement is still
-  syntactically open, subsequent lines are treated as continuation of
-  that same statement. True positives — actual code at the same indent
-  AFTER the statement closes — are still flagged.
+  ```gdscript
+  # gdstyle:ignore-file=quality/max-public-methods,quality/max-class-variables
+  class_name OrchestrationFacade
+  extends Node
+  # ... 25 public methods follow
+  ```
 
-  Reported in [#3](https://github.com/atelico/gdstyle/issues/3).
+  Anchor it at the top of the file by convention, but the parser
+  accepts it anywhere. A bare `# gdstyle:ignore-file` (no `=...`)
+  suppresses every rule in the file — for generated code or
+  third-party drops.
+
+  This is the right tool for the four rules whose diagnostic anchors
+  at the class header or line 1 of the file and which previously
+  couldn't be silenced without uglifying the signature:
+  `quality/max-public-methods`, `quality/max-class-variables`,
+  `quality/max-inner-classes`, `quality/max-file-length`.
+
+  Per-line `# gdstyle:ignore` is unchanged and remains the right tool
+  for spot exemptions on a single line.
+
+### Documentation
+
+- README's *Inline suppression* section is now *Suppressing
+  diagnostics* with a directive/scope table, separate per-line and
+  per-file subsections, and a "when to use which" guide.
 
 ### Install
 
@@ -39,7 +53,7 @@ For the [pre-commit](https://pre-commit.com) framework, bump your
 config to:
 ```yaml
 - repo: https://github.com/atelico/gdstyle
-  rev: v0.1.3
+  rev: v0.1.4
   hooks:
     - id: gdstyle
     - id: gdstyle-fmt
