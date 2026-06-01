@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/atelico/gdstyle/discussions
+    about: Open-ended questions, ideas, and "is this a bug or am I holding it wrong" — use GitHub Discussions rather than an issue.

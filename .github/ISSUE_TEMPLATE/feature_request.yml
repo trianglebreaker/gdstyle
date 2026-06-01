@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest a feature that isn't a new lint rule (CLI flag, config option, editor plugin behaviour, etc.).
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what's getting in your way today? Concrete scenarios are more useful than abstract requests.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: |
+        What would you like gdstyle to do? If you have a CLI flag /
+        config key / API in mind, write it out. Otherwise describe the
+        desired behaviour and we can figure out the shape together.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried, other tools that do the thing, or other shapes the feature could take.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context

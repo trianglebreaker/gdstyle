@@ -1,0 +1,79 @@
+name: Rule suggestion
+description: Suggest a new lint rule or a change to an existing one.
+labels: [rule-suggestion]
+body:
+  - type: textarea
+    id: pattern
+    attributes:
+      label: Pattern the rule should flag
+      description: A short example of code that the rule should warn or error on.
+      placeholder: |
+        # Example: returning a literal from a function that also returns null
+        func find_thing() -> Thing:
+            if not _ready:
+                return  # should this be `return null`?
+            ...
+      render: gdscript
+    validations:
+      required: true
+
+  - type: textarea
+    id: counter
+    attributes:
+      label: Code the rule should NOT flag
+      description: |
+        The corner cases that make this rule hard to get right — code
+        that looks superficially similar to the bad pattern but is
+        actually fine. This is the most important field; a rule
+        without a clear negative case will produce too many false
+        positives.
+      render: gdscript
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - naming
+        - format
+        - order
+        - quality
+        - syntax
+        - other / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Default severity
+      options:
+        - error
+        - warn
+        - off (opt-in only)
+        - not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: autofix
+    attributes:
+      label: Is it auto-fixable?
+      description: |
+        If yes, describe the rewrite. "Safe" means the fix preserves
+        behaviour for any program (e.g. inserting whitespace).
+        "Unsafe" means it might change semantics (e.g. renaming a
+        signal that other files reference) — these need `--unsafe-fix`.
+
+  - type: textarea
+    id: prior_art
+    attributes:
+      label: Prior art
+      description: Does another linter (`gdlint`, `pylint`, `clippy`, `ruff`, …) have this rule? Link to its docs if so.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context

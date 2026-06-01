@@ -1,0 +1,76 @@
+name: Bug report
+description: gdstyle produced the wrong output, crashed, or behaved unexpectedly.
+labels: [bug]
+body:
+  - type: textarea
+    id: snippet
+    attributes:
+      label: Minimal reproduction
+      description: |
+        The smallest GDScript snippet that reproduces the bug. Paste it
+        as-is — please don't shrink to the point that the bug
+        disappears. If the repro involves multiple files (a `.gd` plus
+        a `.tscn`/`.tres`, or several `.gd` files), include each one.
+      placeholder: |
+        extends Node
+
+        func example() -> void:
+            pass
+      render: gdscript
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      description: e.g. `gdstyle check file.gd`, `gdstyle fmt --unsafe-fix`, or "the Godot editor plugin's Format on save".
+      placeholder: gdstyle check file.gd
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What gdstyle did
+      description: |
+        Paste the diagnostic output, the formatter diff, or the panic
+        message. If the bug is a wrong formatted result, include the
+        formatted file (or the relevant section).
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: gdstyle version
+      description: Output of `gdstyle --version`. If you're using the Godot editor plugin, include the plugin version too.
+      placeholder: gdstyle 0.1.3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux (x86_64)
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows (x86_64)
+        - Other (specify in additional context)
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Anything else that might help — config file contents, Godot version, whether the issue depends on tabs vs spaces, etc.
