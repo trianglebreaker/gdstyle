@@ -15,7 +15,7 @@ report it privately rather than opening a public issue:
 
 - Use GitHub's **Report a vulnerability** button on the *Security* tab
   of this repo (preferred — uses GitHub's private advisory flow), **or**
-- Email **piero@atelico.studio** with `[gdstyle security]` in the
+- Email **w4nderlust@gmail.com** with `[gdstyle security]` in the
   subject line.
 
 Please include:
