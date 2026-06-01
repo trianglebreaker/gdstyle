@@ -89,38 +89,99 @@ pub fn lint_file(path: &std::path::Path, config: &Config) -> Result<Vec<Diagnost
     Ok(lint_source(&source, &file_path, config))
 }
 
-/// Per-line suppression state. `None` rule list means "suppress all
-/// diagnostics on this line"; `Some(rules)` means "suppress only these".
-/// We index by line number so `is_suppressed` is O(1).
-type Suppressions = std::collections::HashMap<usize, Vec<Option<Vec<String>>>>;
+/// Per-line and per-file suppression state. For each scope, `None` in
+/// the rule list means "suppress all diagnostics in this scope"; `Some`
+/// means "suppress only these rules".
+#[derive(Default)]
+struct Suppressions {
+    /// Per-line: indexed by line number so `is_suppressed` is O(1).
+    per_line: std::collections::HashMap<usize, Vec<Option<Vec<String>>>>,
+    /// Per-file: all `# gdstyle:ignore-file` directives merged together,
+    /// regardless of where they appear in the source.
+    file_level: Vec<Option<Vec<String>>>,
+}
 
-/// Parse suppression comments (`# gdstyle:ignore`).
+/// Parse suppression comments. Two forms are recognised:
+///
+/// 1. `# gdstyle:ignore[=rule1,rule2]` — per-line scope. On its own line
+///    it suppresses the NEXT line; placed at the end of a code line it
+///    suppresses the SAME line.
+/// 2. `# gdstyle:ignore-file[=rule1,rule2]` — per-file scope. Suppresses
+///    the listed rules (or all rules, when no `=...` is given) for every
+///    diagnostic in the file, regardless of line. Anywhere in the file
+///    works; convention is at the top so it's visible to readers.
 fn parse_suppression_comments(source: &str) -> Suppressions {
-    let mut suppressions: Suppressions = std::collections::HashMap::new();
-    let prefix = "# gdstyle:ignore";
+    let mut suppressions = Suppressions::default();
+    let file_prefix = "# gdstyle:ignore-file";
+    let line_prefix = "# gdstyle:ignore";
 
     for (i, line) in source.lines().enumerate() {
         let line_num = i + 1;
         let trimmed = line.trim();
 
-        // Standalone suppression: applies to the NEXT line.
-        if let Some(rest) = trimmed.strip_prefix(prefix) {
-            let rules = parse_suppression_rules(rest);
-            suppressions.entry(line_num + 1).or_default().push(rules);
+        // File-scope check must come BEFORE the per-line check because
+        // `# gdstyle:ignore` is a prefix of `# gdstyle:ignore-file` and
+        // would otherwise match first and steal the directive.
+        if let Some(rest) = trimmed.strip_prefix(file_prefix) {
+            if directive_terminator_ok(rest) {
+                let rules = parse_suppression_rules(rest);
+                suppressions.file_level.push(rules);
+                continue;
+            }
+        }
+        if let Some(pos) = line.find(file_prefix) {
+            let rest = &line[pos + file_prefix.len()..];
+            if directive_terminator_ok(rest) {
+                let rules = parse_suppression_rules(rest);
+                suppressions.file_level.push(rules);
+                // An inline file-level directive on a code line behaves
+                // identically to a standalone one; we don't ALSO record
+                // a per-line suppression for that line.
+                continue;
+            }
         }
 
-        // Inline suppression: applies to the SAME line.
-        if let Some(pos) = line.find(prefix) {
+        // Standalone per-line suppression: applies to the NEXT line.
+        if let Some(rest) = trimmed.strip_prefix(line_prefix) {
+            if directive_terminator_ok(rest) {
+                let rules = parse_suppression_rules(rest);
+                suppressions
+                    .per_line
+                    .entry(line_num + 1)
+                    .or_default()
+                    .push(rules);
+            }
+        }
+
+        // Inline per-line suppression: applies to the SAME line.
+        if let Some(pos) = line.find(line_prefix) {
             let before = line[..pos].trim();
             if !before.is_empty() {
-                let rest = &line[pos + prefix.len()..];
-                let rules = parse_suppression_rules(rest);
-                suppressions.entry(line_num).or_default().push(rules);
+                let rest = &line[pos + line_prefix.len()..];
+                if directive_terminator_ok(rest) {
+                    let rules = parse_suppression_rules(rest);
+                    suppressions
+                        .per_line
+                        .entry(line_num)
+                        .or_default()
+                        .push(rules);
+                }
             }
         }
     }
 
     suppressions
+}
+
+/// After stripping the directive prefix, the remainder must either be
+/// empty / pure whitespace / a comment continuation, or start with `=`.
+/// Without this check `# gdstyle:ignore-foo` would also match the
+/// `# gdstyle:ignore` prefix and be treated as a bare-suppression.
+fn directive_terminator_ok(rest: &str) -> bool {
+    match rest.chars().next() {
+        None => true,
+        Some(c) => c == '=' || c.is_whitespace(),
+    }
 }
 
 fn parse_suppression_rules(rest: &str) -> Option<Vec<String>> {
@@ -134,14 +195,33 @@ fn parse_suppression_rules(rest: &str) -> Option<Vec<String>> {
     })
 }
 
+fn matches_rule_list(rules: &Option<Vec<String>>, rule: &str) -> bool {
+    match rules {
+        None => true, // bare directive suppresses everything
+        Some(rs) => rs.iter().any(|r| r == rule),
+    }
+}
+
 fn is_suppressed(diagnostic: &Diagnostic, suppressions: &Suppressions) -> bool {
-    let Some(line_suppressions) = suppressions.get(&diagnostic.span.line) else {
+    // File-level wins first: a `# gdstyle:ignore-file` at any line
+    // covers diagnostics anywhere in the file. This is the right home
+    // for class/file-scope limits like `quality/max-public-methods`,
+    // which report against the class header itself and can't be
+    // suppressed with a same-line comment without uglifying the
+    // signature.
+    if suppressions
+        .file_level
+        .iter()
+        .any(|rules| matches_rule_list(rules, &diagnostic.rule))
+    {
+        return true;
+    }
+    let Some(line_suppressions) = suppressions.per_line.get(&diagnostic.span.line) else {
         return false;
     };
-    line_suppressions.iter().any(|rules| match rules {
-        None => true, // bare `# gdstyle:ignore` suppresses everything
-        Some(rs) => rs.iter().any(|r| r == &diagnostic.rule),
-    })
+    line_suppressions
+        .iter()
+        .any(|rules| matches_rule_list(rules, &diagnostic.rule))
 }
 
 #[cfg(test)]
@@ -258,6 +338,105 @@ func take_damage(amount: int) -> void:
                 .iter()
                 .any(|d| d.rule == "naming/class-name-pascal-case"),
             "suppressed rule should not appear"
+        );
+    }
+
+    /// Build a 25-public-method class for the file-scope tests below.
+    /// We rebuild it inline because every test needs to start from a
+    /// known-clean source — sharing a `const` across tests would make
+    /// failures harder to trace.
+    fn bloated_class(prelude: &str) -> String {
+        let mut s = String::from(prelude);
+        s.push_str("class_name Bloated\nextends Node\n");
+        for i in 0..25 {
+            s.push_str(&format!("\nfunc method_{}() -> void:\n\tpass\n", i));
+        }
+        s
+    }
+
+    #[test]
+    fn file_suppression_silences_class_level_rule() {
+        // Regression for the user-reported gap: a `# gdstyle:ignore`
+        // standalone above the class header doesn't catch
+        // `quality/max-public-methods` because the diagnostic anchors
+        // at line 1 and the standalone form suppresses the NEXT line.
+        // The file-level directive sidesteps that mismatch entirely.
+        let source = bloated_class("# gdstyle:ignore-file=quality/max-public-methods\n");
+        let config = Config::default();
+        let diagnostics = lint_source(&source, "test.gd", &config);
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|d| d.rule == "quality/max-public-methods"),
+            "file-level suppression should silence max-public-methods, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
+    fn file_suppression_bare_form_silences_everything() {
+        // `# gdstyle:ignore-file` (no `=...`) drops every diagnostic
+        // in the file — for generated code or third-party drops.
+        let source = "# gdstyle:ignore-file\nclass_name my_bad_name\nvar AlsoBad: int = 5\n";
+        let config = Config::default();
+        let diagnostics = lint_source(source, "test.gd", &config);
+        assert!(
+            diagnostics.is_empty(),
+            "bare ignore-file should drop everything, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
+    fn file_suppression_anywhere_in_file() {
+        // The directive doesn't have to live on line 1 — anywhere in
+        // the file works. This matters for files that already start
+        // with a class-level `##` docstring before the suppression.
+        let mut source = String::from("## Docstring for Bloated.\n");
+        source.push_str(&bloated_class(""));
+        source.push_str("\n# gdstyle:ignore-file=quality/max-public-methods\n");
+        let config = Config::default();
+        let diagnostics = lint_source(&source, "test.gd", &config);
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|d| d.rule == "quality/max-public-methods"),
+            "file-level suppression must apply regardless of position, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
+    fn file_suppression_narrows_to_listed_rules() {
+        // A scoped `# gdstyle:ignore-file=...` only silences the
+        // listed rules — others still fire. The unlisted naming rule
+        // on `BadName` must remain.
+        let source = "# gdstyle:ignore-file=quality/max-public-methods\nclass_name Bloated\nextends Node\nvar BadName: int = 5\n";
+        let config = Config::default();
+        let diagnostics = lint_source(source, "test.gd", &config);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.rule == "naming/variable-name-snake-case"),
+            "scoped ignore-file should NOT silence unlisted rules, got: {:?}",
+            diagnostics
+        );
+    }
+
+    #[test]
+    fn file_suppression_does_not_swallow_per_line_directive() {
+        // Regression guard: the `ignore-file` parsing path runs before
+        // `ignore` and `continue`s when it matches. Make sure a
+        // regular per-line `# gdstyle:ignore` directive still routes
+        // through the per-line path.
+        let source = "# gdstyle:ignore=naming/class-name-pascal-case\nclass_name my_player\n";
+        let config = Config::default();
+        let diagnostics = lint_source(source, "test.gd", &config);
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|d| d.rule == "naming/class-name-pascal-case"),
+            "per-line directive still works alongside ignore-file support"
         );
     }
 
