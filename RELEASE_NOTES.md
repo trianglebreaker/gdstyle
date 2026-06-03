@@ -1,38 +1,44 @@
-## gdstyle 0.1.4
+## gdstyle 0.1.5
 
-Adds file-scope suppression so class- and file-level rules can be
-silenced cleanly.
+Patch release fixing a formatter explosion on `@abstract` (and any
+other unrecognised class-level annotation).
 
-### Added
+### Fixed
 
-- **`# gdstyle:ignore-file` directive** for file-scope suppression.
+- **`gdstyle fmt` no longer duplicates `@abstract` / `class_name`
+  blocks.** When an unrecognised top-level annotation
+  (`@abstract` in Godot 4.6+, also `@experimental` and `@deprecated`)
+  appeared above `class_name`/`extends` with a function later in the
+  file, the parser held it in pending state and silently attached it
+  to that function. The formatter then treated lines 1..N as part of
+  the function's "block" and re-emitted them on every pass — the
+  multi-pass loop could blow the file up to 30+ duplicate
+  `@abstract\nclass_name Pickup\n` chunks before stabilising.
 
-  ```gdscript
-  # gdstyle:ignore-file=quality/max-public-methods,quality/max-class-variables
-  class_name OrchestrationFacade
-  extends Node
-  # ... 25 public methods follow
-  ```
+  The parser now flushes pending unknown annotations into a new
+  class-level `ClassAnnotation` node at six boundary points where the
+  pending annotation can't legitimately attach:
+  `class_name`, `extends`, `signal`, `enum`, `const`, inner `class`,
+  and end-of-file.
 
-  Anchor it at the top of the file by convention, but the parser
-  accepts it anywhere. A bare `# gdstyle:ignore-file` (no `=...`)
-  suppresses every rule in the file — for generated code or
-  third-party drops.
+  Function-level `@abstract` (`@abstract\nfunc to_implement():`) still
+  attaches to its method as before — abstract method declarations are
+  unaffected.
 
-  This is the right tool for the four rules whose diagnostic anchors
-  at the class header or line 1 of the file and which previously
-  couldn't be silenced without uglifying the signature:
-  `quality/max-public-methods`, `quality/max-class-variables`,
-  `quality/max-inner-classes`, `quality/max-file-length`.
+  Reported in [#4](https://github.com/atelico/gdstyle/issues/4).
 
-  Per-line `# gdstyle:ignore` is unchanged and remains the right tool
-  for spot exemptions on a single line.
+### Behaviour notes
 
-### Documentation
-
-- README's *Inline suppression* section is now *Suppressing
-  diagnostics* with a directive/scope table, separate per-line and
-  per-file subsections, and a "when to use which" guide.
+- The fix is structural (by member kind), not name-based. Any future
+  Godot annotation that lands at the top of a file will sort with
+  `@tool`/`@icon`/`@static_unload` automatically without a code change.
+- A trailing top-level annotation at EOF with no following declaration
+  used to be silently dropped; it now survives a round-trip through
+  `gdstyle fmt`.
+- A leading annotation directly above an inner `class Inner:` is
+  attributed to the OUTER class (the AST doesn't yet model
+  inner-class annotations). If that becomes a practical issue, file
+  one and we'll wire annotation slots through inner-class parsing.
 
 ### Install
 
@@ -53,7 +59,7 @@ For the [pre-commit](https://pre-commit.com) framework, bump your
 config to:
 ```yaml
 - repo: https://github.com/atelico/gdstyle
-  rev: v0.1.4
+  rev: v0.1.5
   hooks:
     - id: gdstyle
     - id: gdstyle-fmt
