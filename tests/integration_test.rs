@@ -1707,6 +1707,126 @@ fn fmt_trailing_unknown_annotation_at_eof_not_dropped() {
 }
 
 #[test]
+fn fmt_class_annotation_with_args_preserves_args() {
+    // The parsed ClassAnnotation only stores the annotation NAME (no
+    // parens, no args), but the formatter emits via line-based source
+    // slicing, so the raw `@x(a, b)` text round-trips verbatim. Lock
+    // that in: an AST-based emitter introduced later would silently
+    // drop the args, and we want a test that catches it.
+    let source = "@some_unknown(42, \"arg\")\n\nclass_name Foo\nextends Node\n\n\nfunc bar() -> void:\n\tpass\n";
+    let config = default_config();
+    let formatted = formatter::format_source(source, &config);
+    assert!(
+        formatted.contains("@some_unknown(42, \"arg\")"),
+        "annotation args must round-trip verbatim, got:\n{}",
+        formatted
+    );
+    assert_eq!(
+        formatted.matches("@some_unknown").count(),
+        1,
+        "annotation with args must not duplicate, got:\n{}",
+        formatted
+    );
+}
+
+#[test]
+fn fmt_stacked_class_annotations_preserve_source_order() {
+    // Multiple unknown annotations above class_name must be emitted in
+    // the order the user wrote them — the flush iterates a Vec, but
+    // a future switch to a Set or HashMap would silently scramble.
+    let source = "@abstract\n@experimental\n@deprecated\n\nclass_name Foo\nextends Node\n\n\nfunc bar() -> void:\n\tpass\n";
+    let config = default_config();
+    let formatted = formatter::format_source(source, &config);
+    let abs = formatted.find("@abstract").expect("missing @abstract");
+    let exp = formatted.find("@experimental").expect("missing @experimental");
+    let dep = formatted.find("@deprecated").expect("missing @deprecated");
+    assert!(
+        abs < exp && exp < dep,
+        "stacked annotations must keep source order @abstract → @experimental → @deprecated, got positions abs={} exp={} dep={} in:\n{}",
+        abs, exp, dep, formatted
+    );
+}
+
+#[test]
+fn fmt_class_and_function_level_abstract_both_survive() {
+    // Class-level @abstract above class_name AND function-level
+    // @abstract above a method must both survive. Guards against an
+    // over-eager flush that promotes EVERY @abstract to class-level.
+    let source = "@abstract\nclass_name Pickup\nextends Node\n\n\n@abstract\nfunc to_implement() -> void:\n\tpass\n\n\nfunc concrete() -> void:\n\tpass\n";
+    let config = default_config();
+    let formatted = formatter::format_source(source, &config);
+    assert_eq!(
+        formatted.matches("@abstract").count(),
+        2,
+        "both @abstract occurrences must survive, got:\n{}",
+        formatted
+    );
+    assert!(
+        formatted.contains("@abstract\nclass_name Pickup"),
+        "class-level @abstract must sit above class_name, got:\n{}",
+        formatted
+    );
+    assert!(
+        formatted.contains("@abstract\nfunc to_implement("),
+        "function-level @abstract must stay attached to its function, got:\n{}",
+        formatted
+    );
+}
+
+#[test]
+fn fmt_class_annotation_is_idempotent() {
+    // Formatting twice must produce the identical output. The original
+    // bug was a multi-pass duplication loop; this is the direct
+    // assertion that we no longer oscillate.
+    let source = "@abstract\n\nclass_name Pickup\nextends Node\n\n\n\nfunc apply_to(target: Node3D) -> void:\n\tpass\n";
+    let config = default_config();
+    let once = formatter::format_source(source, &config);
+    let twice = formatter::format_source(&once, &config);
+    assert_eq!(
+        once, twice,
+        "formatter must be idempotent; pass 1 vs pass 2 differ:\n--- pass 1 ---\n{}\n--- pass 2 ---\n{}",
+        once, twice
+    );
+}
+
+#[test]
+fn fmt_class_annotation_with_docstring_between() {
+    // `@abstract\n## docstring\nclass_name Foo` — the docstring is
+    // logically class-level and the reorder pass moves it to after
+    // class_name/extends (canonical Godot style). @abstract must end
+    // up above class_name, the docstring after extends, neither
+    // duplicated.
+    let source = "@abstract\n## Top-level docstring for this abstract class.\nclass_name Foo\nextends Node\n\n\nfunc bar() -> void:\n\tpass\n";
+    let config = default_config();
+    let formatted = formatter::format_source(source, &config);
+    assert_eq!(
+        formatted.matches("@abstract").count(),
+        1,
+        "@abstract must not duplicate, got:\n{}",
+        formatted
+    );
+    assert_eq!(
+        formatted.matches("## Top-level docstring").count(),
+        1,
+        "docstring must not duplicate, got:\n{}",
+        formatted
+    );
+    let abs_pos = formatted.find("@abstract").unwrap();
+    let cls_pos = formatted.find("class_name Foo").unwrap();
+    let doc_pos = formatted.find("## Top-level docstring").unwrap();
+    assert!(
+        abs_pos < cls_pos,
+        "@abstract must come before class_name, got:\n{}",
+        formatted
+    );
+    assert!(
+        cls_pos < doc_pos,
+        "class_name must come before the docstring (canonical Godot order), got:\n{}",
+        formatted
+    );
+}
+
+#[test]
 fn fmt_preserves_function_level_abstract_annotation() {
     // The function-level form of `@abstract` (declaring an abstract
     // method, distinct from declaring an abstract class) must continue

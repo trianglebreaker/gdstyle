@@ -164,6 +164,12 @@ impl<'t> Parser<'t> {
                 }
                 _ => {
                     // Skip tokens we don't understand at the top level.
+                    // Note: pending_annotations is intentionally NOT
+                    // flushed here. A stray Indent/Dedent between an
+                    // annotation and its decl is the common case
+                    // (lexer artifact); the EOF flush below is the
+                    // safety net for annotations that never find a
+                    // home.
                     self.advance();
                 }
             }

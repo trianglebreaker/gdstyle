@@ -201,9 +201,7 @@ impl ClassMember {
             ClassMember::ToolAnnotation { .. }
             | ClassMember::IconAnnotation { .. }
             | ClassMember::StaticUnloadAnnotation { .. }
-            | ClassMember::ClassAnnotation { .. } => {
-                "script annotation (@tool/@icon/@static_unload/@abstract)"
-            }
+            | ClassMember::ClassAnnotation { .. } => "script annotation",
             ClassMember::ClassNameDecl { .. } => "class_name declaration",
             ClassMember::ExtendsDecl { .. } => "extends declaration",
             ClassMember::DocComment { .. } => "documentation comment",
