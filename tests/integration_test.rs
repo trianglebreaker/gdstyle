@@ -2175,6 +2175,57 @@ fn fmt_reorder_with_enum_and_doc_comments() {
 // Fix A: doc comments attached to next declaration are not ordering violations
 
 #[test]
+fn ordering_inner_class_comment_first_body_line_not_flagged() {
+    // Regression for issue #5: an inner class whose first body line is
+    // a `##` doc comment (or any comment-only line) had its members
+    // misclassified as siblings of the outer class. The lexer wasn't
+    // emitting an Indent before the leading comment, so the parser's
+    // `parse_indented_block` saw no Indent, returned an empty body,
+    // and the `var a` token fell back to the outer parse loop —
+    // landing AFTER the `class Bar` node and tripping
+    // `order/class-member-order` on every inner-class member.
+    let source = "class_name Foo extends Object\n## doc.\nclass Bar extends RefCounted:\n\t## doc for a.\n\tvar a: int\n";
+    let config = default_config();
+    let diagnostics = linter::lint_source(source, "test.gd", &config);
+    let ordering: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.rule == "order/class-member-order")
+        .collect();
+    assert!(
+        ordering.is_empty(),
+        "inner-class members with a leading comment must not trigger ordering, got:\n{}",
+        ordering
+            .iter()
+            .map(|d| format!("  {}:{} {}", d.span.line, d.span.column, d.message))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+#[test]
+fn ordering_inner_class_multiple_leading_comments_not_flagged() {
+    // Same family: multiple consecutive comment-only lines (mix of `#`
+    // and `##`) at the start of an inner class body. Both the parser
+    // and the formatter should treat them as part of the inner body.
+    let source = "class_name Foo extends Object\n\n\nclass Bar extends RefCounted:\n\t# plain comment\n\t## doc comment\n\tvar a: int\n\tvar b: int\n";
+    let config = default_config();
+    let diagnostics = linter::lint_source(source, "test.gd", &config);
+    let ordering: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.rule == "order/class-member-order")
+        .collect();
+    assert!(
+        ordering.is_empty(),
+        "stacked leading comments in an inner class body must not trip ordering, got:\n{}",
+        ordering
+            .iter()
+            .map(|d| format!("  {}:{} {}", d.span.line, d.span.column, d.message))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+#[test]
 fn ordering_doc_comment_before_static_func_not_flagged() {
     let source = "var x = 1\n\n## Docs for foo\n## More docs\nstatic func foo():\n\tpass\n";
     let config = default_config();

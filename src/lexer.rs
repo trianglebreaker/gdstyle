@@ -224,28 +224,37 @@ impl<'a> Lexer<'a> {
                     return None;
                 }
                 '#' => {
-                    // Comment-only line. If the comment sits at the same or
-                    // deeper indent than the current block, preserve the
-                    // indent stack (a trailing comment inside a body shouldn't
-                    // pop the stack).
+                    // Comment-only line. Three cases by relative indent:
                     //
-                    // If the comment is at SHALLOWER indent, it might be a
-                    // block boundary (top-level `## doc` between two
-                    // functions; `#` comment between inner-class methods) or
-                    // just mid-body noise (a stray col-1 comment sandwiched
-                    // between two deeper-indented body statements). The two
-                    // look identical on the comment line itself — disambiguate
-                    // by peeking at the next REAL line. If it's deeper than
-                    // the comment, the comment is mid-body noise and the
-                    // block continues; preserve the stack. Otherwise it's a
-                    // boundary; fall through to dedent emission.
+                    // == current: a trailing comment inside an open body.
+                    //   Preserve the stack so it stays inside the body.
+                    //
+                    // <  current: might be a block boundary (top-level
+                    //   `## doc` between two functions; `#` comment
+                    //   between inner-class methods) or mid-body noise (a
+                    //   stray col-1 comment sandwiched between two
+                    //   deeper-indented body statements). The two look
+                    //   identical on the comment line itself — peek at
+                    //   the next REAL line. Deeper → mid-body noise,
+                    //   preserve stack. Otherwise → boundary, dedent.
+                    //
+                    // >  current: the comment is the FIRST line of a new
+                    //   indented block (e.g. `class Bar:\n\t## doc\n\tvar
+                    //   a: int`). Fall through to Indent emission so the
+                    //   block opens here rather than at the comment's
+                    //   following code line. Without this, the parser's
+                    //   `parse_indented_block` saw no Indent yet, bailed
+                    //   with an empty body, and let the `var` fall back
+                    //   to the outer scope — which made the ordering rule
+                    //   flag every inner-class member.
                     let current_indent = *self.indent_stack.last().unwrap();
-                    if indent_level >= current_indent {
+                    if indent_level == current_indent {
                         return None;
                     }
-                    if self
-                        .peek_next_real_line_indent()
-                        .is_some_and(|next| next > indent_level)
+                    if indent_level < current_indent
+                        && self
+                            .peek_next_real_line_indent()
+                            .is_some_and(|next| next > indent_level)
                     {
                         return None;
                     }
@@ -1445,6 +1454,35 @@ func _ready() -> void:
         assert_eq!(
             dedents_before_comment, 0,
             "mid-body col-1 comment must not split the enclosing block"
+        );
+    }
+
+    #[test]
+    fn comment_at_deeper_indent_opens_block() {
+        // Regression for issue #5: an inner-class body whose first
+        // line is a comment used to NOT push an Indent onto the
+        // stack (the lexer preserved the indent stack for any
+        // comment-only line). The parser's `parse_indented_block`
+        // then saw no Indent, bailed with an empty body, and the
+        // inner-class members fell back to the outer scope —
+        // tripping `order/class-member-order` on every one.
+        //
+        // The deeper-indent comment must now open the block right
+        // away, so the body is parsed inside the inner class.
+        let source = "class Bar:\n\t## doc\n\tvar a: int\n";
+        let tokens = tokenize(source);
+        let var_pos = tokens
+            .iter()
+            .position(|t| t.kind == TokenKind::Var)
+            .expect("Var token should be present");
+        let indents_before_var = tokens[..var_pos]
+            .iter()
+            .filter(|t| t.kind == TokenKind::Indent)
+            .count();
+        assert_eq!(
+            indents_before_var, 1,
+            "an Indent must be emitted before the doc comment that opens the inner-class body, got tokens: {:?}",
+            tokens
         );
     }
 
