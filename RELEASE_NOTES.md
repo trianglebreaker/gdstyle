@@ -1,28 +1,38 @@
-## gdstyle 0.1.6
+## gdstyle 0.1.7
 
-Patch release fixing a parser bug that caused `order/class-member-order`
-false positives on inner classes whose first body line was a comment.
+Editor plugin patch release fixing a startup file-lock warning on
+Windows.
 
 ### Fixed
 
-- **`order/class-member-order` no longer fires on every inner-class
-  member** when the inner class body starts with a comment-only line
-  (`#` or `##` on its own line, e.g. a leading doc comment). The lexer
-  was preserving the indent stack on any comment-only line, so the
-  parser saw no `Indent` at the start of the body, returned an empty
-  inner class, and the following `var`/`func` tokens fell back to the
-  outer parse loop. Every inner-class member then looked like a
-  sibling of the inner class and tripped the ordering rule.
+- **Godot plugin no longer fails to write `settings.json` on startup.**
+  Reported on Windows as "Unable to write to file 'settings.json',
+  file in use, locked or lacking permissions", with an orphan
+  `settings.json#######.tmp` left behind every project startup.
 
-  The lexer now splits comment-only line handling into three cases
-  by relative indent: same indent preserves the stack (unchanged),
-  shallower indent uses the existing peek-ahead to disambiguate
-  boundary vs mid-body noise (unchanged), and deeper indent falls
-  through to `Indent` emission so the leading comment opens the new
-  block.
+  Cause: `_load_settings` opened the file for READ, then assigned
+  `_auto_lint_check.button_pressed = X` and
+  `_auto_format_check.button_pressed = X`. Those assignments fire
+  the `toggled` signal synchronously, the handler calls
+  `_save_settings`, and `_save_settings` opens the same file for
+  WRITE while the READ handle is still alive on the call stack. On
+  Windows file locks are exclusive so the WRITE open fails, Godot's
+  atomic-save rename orphans the `.tmp`, and the warning surfaces.
 
-  Reported in [#5](https://github.com/atelico/gdstyle/issues/5) with
-  a full root-cause trace from the reporter.
+  The plugin now uses `set_pressed_no_signal()` for both checkboxes
+  during load (the idiomatic Godot fix), wraps the load body in a
+  `_loading_settings` guard flag, and adds an explicit `file.close()`
+  plus a `push_warning` on open failure so a future regression
+  surfaces with a real error instead of silence.
+
+  Reported in [#6](https://github.com/atelico/gdstyle/issues/6).
+
+### How to upgrade
+
+After installing v0.1.7, delete any leftover
+`settings.json#######.tmp` files in `addons/gdstyle/` (Godot left
+them behind from previous startups because the rename kept failing),
+then restart Godot.
 
 ### Install
 
@@ -43,7 +53,7 @@ For the [pre-commit](https://pre-commit.com) framework, bump your
 config to:
 ```yaml
 - repo: https://github.com/atelico/gdstyle
-  rev: v0.1.6
+  rev: v0.1.7
   hooks:
     - id: gdstyle
     - id: gdstyle-fmt
